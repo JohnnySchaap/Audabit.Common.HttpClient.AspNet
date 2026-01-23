@@ -1,0 +1,234 @@
+trigger:
+  branches:
+    include:
+    - main
+    - develop
+    - feature/*
+    - release/*
+
+pool:
+  vmImage: 'ubuntu-latest'
+
+name: $(Date:yyMMdd)$(Rev:.rr)
+
+variables:
+  buildConfiguration: 'Release'
+  GitHubOwner: 'JohnnySchaap'
+  AzureArtifactsFeed: 'Audabit/Audabit'
+  DOTNET_SKIP_FIRST_TIME_EXPERIENCE: 'true'
+  DOTNET_CLI_TELEMETRY_OPTOUT: 'true'
+
+stages:
+- stage: Build
+  displayName: 'Build and Package'
+  jobs:
+  - job: BuildJob
+    displayName: 'Build NuGet Package'
+    variables:
+    - group: GitHubSecrets
+    steps:
+    - checkout: self
+      fetchDepth: 0
+      persistCredentials: true
+    
+    - task: UseDotNet@2
+      displayName: 'Install .NET SDK'
+      inputs:
+        packageType: 'sdk'
+        version: '10.x'
+        
+    # Extract Major and Minor version from csproj
+    - task: PowerShell@2
+      displayName: 'Extract Version from csproj'
+      inputs:
+        targetType: 'inline'
+        script: |
+          # Find the main project file (exclude test projects)
+          $csprojFile = Get-ChildItem -Path . -Filter *.csproj -Recurse | 
+            Where-Object { $_.Name -notmatch '[Tt]est' } | 
+            Select-Object -First 1
+          
+          if ($null -eq $csprojFile) {
+            Write-Host "##vso[task.logissue type=error]No non-test csproj file found"
+            exit 1
+          }
+          
+          Write-Host "Using project file: $($csprojFile.FullName)"
+          
+          [xml]$csproj = Get-Content $csprojFile.FullName
+          $version = $csproj.Project.PropertyGroup.Version | Where-Object { $_ -ne $null } | Select-Object -First 1
+          
+          if ([string]::IsNullOrEmpty($version)) {
+            Write-Host "##vso[task.logissue type=error]No version found in csproj file"
+            exit 1
+          }
+          
+          $versionParts = $version.Split('.')
+          $majorVersion = $versionParts[0]
+          $minorVersion = $versionParts[1]
+          
+          Write-Host "Major Version: $majorVersion"
+          Write-Host "Minor Version: $minorVersion"
+          
+          echo "##vso[task.setvariable variable=MajorVersion]$majorVersion"
+          echo "##vso[task.setvariable variable=MinorVersion]$minorVersion"
+    
+    # Generate patch version from build number
+    - task: PowerShell@2
+      displayName: 'Generate Package Version'
+      inputs:
+        targetType: 'inline'
+        script: |
+          $buildNumber = "$(Build.BuildNumber)"
+          $patchVersion = $buildNumber
+          
+          # Check if this is a prerelease (not main branch)
+          $branchName = "$(Build.SourceBranchName)"
+          $isPrerelease = $branchName -ne "main"
+          
+          if ($isPrerelease) {
+            # Create prerelease version with branch name
+            $safeBranchName = $branchName -replace '[^a-zA-Z0-9-]', '-'
+            $packageVersion = "$(MajorVersion).$(MinorVersion).$patchVersion-$safeBranchName"
+          } else {
+            # Stable release version
+            $packageVersion = "$(MajorVersion).$(MinorVersion).$patchVersion"
+          }
+          
+          Write-Host "Package Version: $packageVersion"
+          echo "##vso[task.setvariable variable=PackageVersion]$packageVersion"
+          echo "##vso[build.updatebuildnumber]$packageVersion"
+    
+    # Authenticate with Azure Artifacts
+    - task: NuGetAuthenticate@1
+      displayName: 'Authenticate with Azure Artifacts'
+    
+    # Run dotnet format
+    - task: DotNetCoreCLI@2
+      displayName: 'dotnet format'
+      inputs:
+        command: 'custom'
+        custom: 'format'
+        arguments: '--verify-no-changes --verbosity diagnostic'
+      continueOnError: false
+    
+    # Restore dependencies
+    - task: DotNetCoreCLI@2
+      displayName: 'dotnet restore'
+      inputs:
+        command: 'restore'
+        projects: '**/*.csproj'
+        feedsToUse: 'select'
+        vstsFeed: '$(AzureArtifactsFeed)'
+        includeNuGetOrg: true
+    
+    # Build all projects
+    - task: DotNetCoreCLI@2
+      displayName: 'dotnet build'
+      inputs:
+        command: 'build'
+        projects: '**/*.csproj'
+        arguments: '--configuration $(buildConfiguration) --no-restore'
+    
+    # Run tests with code coverage
+    - task: DotNetCoreCLI@2
+      displayName: 'dotnet test'
+      inputs:
+        command: 'test'
+        projects: '**/*[Tt]est*.csproj'
+        arguments: '--configuration $(buildConfiguration) --no-build --collect:"XPlat Code Coverage"'
+        publishTestResults: true
+      continueOnError: false
+    
+    # Copy code coverage results
+    - task: CopyFiles@2
+      displayName: 'Copy Code Coverage'
+      inputs:
+        SourceFolder: '$(Agent.TempDirectory)'
+        Contents: '**/coverage.cobertura.xml'
+        TargetFolder: '$(Build.ArtifactStagingDirectory)/CodeCoverage'
+        flattenFolders: true
+      condition: succeededOrFailed()
+    
+    # Publish code coverage results
+    - task: PublishCodeCoverageResults@2
+      displayName: 'Publish Code Coverage'
+      inputs:
+        codeCoverageTool: 'Cobertura'
+        summaryFileLocation: '$(Build.ArtifactStagingDirectory)/CodeCoverage/coverage.cobertura.xml'
+      condition: succeededOrFailed()
+    
+    # Pack NuGet package (exclude test projects)
+    - task: DotNetCoreCLI@2
+      displayName: 'dotnet pack'
+      inputs:
+        command: 'pack'
+        packagesToPack: '**/*.csproj;!**/*[Tt]est*.csproj'
+        configuration: '$(buildConfiguration)'
+        nobuild: true
+        versioningScheme: 'byEnvVar'
+        versionEnvVar: 'PackageVersion'
+        packDirectory: '$(Build.ArtifactStagingDirectory)/packages'
+    
+    # Publish NuGet package as artifact
+    - task: PublishBuildArtifacts@1
+      displayName: 'Publish NuGet Package Artifact'
+      inputs:
+        PathtoPublish: '$(Build.ArtifactStagingDirectory)/packages'
+        ArtifactName: 'packages'
+        publishLocation: 'Container'
+    
+    # Publish code coverage as artifact
+    - task: PublishBuildArtifacts@1
+      displayName: 'Publish Code Coverage Artifact'
+      inputs:
+        PathtoPublish: '$(Build.ArtifactStagingDirectory)/CodeCoverage'
+        ArtifactName: 'codecoverage'
+        publishLocation: 'Container'
+      condition: succeededOrFailed()
+    
+    # Push to Azure Artifacts feed
+    - task: DotNetCoreCLI@2
+      displayName: 'Push NuGet Package to Azure Artifacts'
+      inputs:
+        command: 'push'
+        packagesToPush: '$(Build.ArtifactStagingDirectory)/packages/**/*.nupkg;!$(Build.ArtifactStagingDirectory)/packages/**/*.symbols.nupkg'
+        nuGetFeedType: 'internal'
+        publishVstsFeed: '$(AzureArtifactsFeed)'
+      condition: succeeded()
+    
+    # Sync to GitHub
+    - task: PowerShell@2
+      displayName: 'Mirror Repository to GitHub'
+      inputs:
+        targetType: 'inline'
+        script: |
+          $repoName = "$(Build.Repository.Name)"
+          $githubOwner = "$(GitHubOwner)"
+          $branchName = "$(Build.SourceBranchName)"
+          
+          Write-Host "Syncing to GitHub: $githubOwner/$repoName"
+          Write-Host "Current branch: $branchName"
+          
+          # Configure git
+          git config user.email "azure-pipelines@audabit.nl"
+          git config user.name "Azure Pipelines"
+          
+          # Remove existing remote if it exists
+          git remote remove github 2>$null
+          
+          # Add GitHub remote
+          git remote add github https://$(GitHubPAT)@github.com/$githubOwner/$repoName.git
+          
+          # Fetch all branches and tags from origin
+          git fetch origin --tags
+          
+          # Push current branch
+          git push github HEAD:refs/heads/$branchName --force
+          
+          # Push all tags
+          git push github --tags --force
+          
+          Write-Host "Successfully synced to GitHub"
+      condition: and(succeeded(), in(variables['Build.SourceBranchName'], 'main', 'develop'))
+      continueOnError: true

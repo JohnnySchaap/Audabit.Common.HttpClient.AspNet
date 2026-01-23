@@ -1,0 +1,55 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);1591</NoWarn>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <!-- Versioning: Major version matches .NET version -->
+    <Version>10.0.0</Version>
+    
+    <!-- NuGet Package Metadata -->
+    <PackageId>Audabit.Common.HttpClient.AspNet</PackageId>
+    <Authors>John Schaap</Authors>
+    <Company>Audabit Software Solutions B.V.</Company>
+    <Product>Audabit Common Libraries</Product>
+    <Description>Provides resilient HTTP client configuration with Polly policies, request/response logging, correlation ID propagation, and comprehensive observability for ASP.NET Core applications.</Description>
+    <Copyright>Copyright © Audabit Software Solutions B.V. 2026</Copyright>
+    <PackageTags>aspnetcore;httpclient;polly;resilience;retry;circuit-breaker;correlation-id;logging;observability</PackageTags>
+    <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
+    <PackageProjectUrl>https://github.com/JohnnySchaap/Audabit.Common.HttpClient.AspNet</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/JohnnySchaap/Audabit.Common.HttpClient.AspNet</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    
+    <!-- Package Build Settings -->
+    <GeneratePackageOnBuild>false</GeneratePackageOnBuild>
+    <IncludeSymbols>true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+    <PublishRepositoryUrl>true</PublishRepositoryUrl>
+    <EmbedUntrackedSources>true</EmbedUntrackedSources>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <Deterministic>true</Deterministic>
+    <ContinuousIntegrationBuild Condition="'$(CI)' == 'true'">true</ContinuousIntegrationBuild>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="FluentValidation" Version="11.11.0" />
+    <PackageReference Include="Microsoft.Extensions.Http.Polly" Version="10.0.0" />
+    <PackageReference Include="Polly" Version="8.5.0" />
+    <PackageReference Include="Audabit.Common.Observability" Version="10.0.*" />
+    <PackageReference Include="Audabit.Common.Validation.AspNet" Version="10.0.*" />
+  </ItemGroup>
+
+</Project>
